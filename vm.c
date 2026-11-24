@@ -245,6 +245,75 @@ static FILE *abre_backing_store(void) {
     return arquivo;
 }
 
+// tlb
+
+typedef struct {
+    int pagina;
+    int quadro;
+    bool valida;
+    unsigned long uso;
+} EntradaTLB;
+
+typedef struct {
+    EntradaTLB entradas[TAM_TLB];
+    int prox_fifo;
+} Tlb;
+
+static void tlb_inicializa(Tlb *tlb) {
+    for (int i = 0; i < TAM_TLB; i++) {
+        tlb->entradas[i] = (EntradaTLB){ .pagina = -1, .quadro = -1, .valida = false, .uso = 0 };
+    }
+    tlb->prox_fifo = 0;
+}
+
+// busca sequencial
+static int tlb_busca(const Tlb *tlb, int pagina) {
+    for (int i = 0; i < TAM_TLB; i++) {
+        if (tlb->entradas[i].valida && tlb->entradas[i].pagina == pagina) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+// fifo: ponteiro circular puro, mesmo que haja entrada invalidada (buraco);
+// lru: primeira entrada invalida, senao a de menor uso
+static int tlb_insere(Tlb *tlb, Algoritmo alg, int pagina, int quadro, unsigned long relogio) {
+    int indice;
+    if (alg == ALG_FIFO) {
+        indice = tlb->prox_fifo;
+        tlb->prox_fifo = (indice + 1) % TAM_TLB;
+    } else {
+        indice = -1;
+        for (int i = 0; i < TAM_TLB && indice < 0; i++) {
+            if (!tlb->entradas[i].valida) {
+                indice = i;
+            }
+        }
+        if (indice < 0) {
+            indice = 0;
+            for (int i = 1; i < TAM_TLB; i++) {
+                if (tlb->entradas[i].uso < tlb->entradas[indice].uso) {
+                    indice = i;
+                }
+            }
+        }
+    }
+
+    tlb->entradas[indice] = (EntradaTLB){
+        .pagina = pagina, .quadro = quadro, .valida = true, .uso = relogio
+    };
+    return indice;
+}
+
+static void tlb_invalida(Tlb *tlb, int pagina) {
+    for (int i = 0; i < TAM_TLB; i++) {
+        if (tlb->entradas[i].valida && tlb->entradas[i].pagina == pagina) {
+            tlb->entradas[i].valida = false;
+        }
+    }
+}
+
 // memoria virtual
 
 // o estado inteiro e estatico (64 KiB de memoria fisica, tabela, quadros);
@@ -256,8 +325,10 @@ typedef struct {
     unsigned long uso_quadro[N_QUADROS];
     int prox_livre;
     int prox_vitima_fifo;
+    Tlb tlb;
     unsigned long relogio;
     long faults;
+    long hits;
 } MemoriaVirtual;
 
 static void inicializa_memoria(MemoriaVirtual *mv) {
@@ -271,8 +342,10 @@ static void inicializa_memoria(MemoriaVirtual *mv) {
     memset(mv->memoria, 0, sizeof mv->memoria);
     mv->prox_livre = 0;
     mv->prox_vitima_fifo = 0;
+    tlb_inicializa(&mv->tlb);
     mv->relogio = 0;
     mv->faults = 0;
+    mv->hits = 0;
 }
 
 static bool carrega_pagina(FILE *backing, int pagina, signed char *destino) {
@@ -311,42 +384,57 @@ static int escolhe_vitima(MemoriaVirtual *mv, Algoritmo alg) {
     return quadro;
 }
 
-static bool traduz(MemoriaVirtual *mv, int endereco, Algoritmo alg, FILE *backing,
-                   int *fisico, int *valor) {
+static bool traduz(MemoriaVirtual *mv, int endereco, Algoritmo alg_pagina, Algoritmo alg_tlb,
+                   FILE *backing, int *indice_tlb, int *fisico, int *valor) {
     mv->relogio++;
 
     int pagina = endereco >> 8;
     int deslocamento = endereco & (TAM_PAGINA - 1);
-    int quadro = mv->tabela[pagina];
+    int quadro;
+    int indice = tlb_busca(&mv->tlb, pagina);
 
-    if (quadro < 0) {
-        mv->faults++;
+    if (indice >= 0) {
+        mv->hits++;
+        quadro = mv->tlb.entradas[indice].quadro;
+        mv->tlb.entradas[indice].uso = mv->relogio;
+    } else {
+        quadro = mv->tabela[pagina];
 
-        if (mv->prox_livre < N_QUADROS) {
-            quadro = mv->prox_livre++;
-        } else {
-            quadro = escolhe_vitima(mv, alg);
-            int despejada = mv->dono[quadro];
-            if (despejada >= 0) {
-                mv->tabela[despejada] = -1;
+        if (quadro < 0) {
+            mv->faults++;
+
+            if (mv->prox_livre < N_QUADROS) {
+                quadro = mv->prox_livre++;
+            } else {
+                quadro = escolhe_vitima(mv, alg_pagina);
+                int despejada = mv->dono[quadro];
+                if (despejada >= 0) {
+                    mv->tabela[despejada] = -1;
+                    tlb_invalida(&mv->tlb, despejada);
+                }
             }
+
+            if (!carrega_pagina(backing, pagina, mv->memoria[quadro])) {
+                return false;
+            }
+            mv->tabela[pagina] = quadro;
+            mv->dono[quadro] = pagina;
         }
 
-        if (!carrega_pagina(backing, pagina, mv->memoria[quadro])) {
-            return false;
-        }
-        mv->tabela[pagina] = quadro;
-        mv->dono[quadro] = pagina;
+        indice = tlb_insere(&mv->tlb, alg_tlb, pagina, quadro, mv->relogio);
     }
 
+    // todo acesso conta para o lru de pagina, inclusive hit de tlb
     mv->uso_quadro[quadro] = mv->relogio;
+    *indice_tlb = indice;
     *fisico = quadro * TAM_PAGINA + deslocamento;
     *valor = mv->memoria[quadro][deslocamento];
     return true;
 }
 
 static bool escreve_saida(const char *caminho, const ListaEnderecos *enderecos,
-                          Algoritmo alg, FILE *backing, MemoriaVirtual *mv) {
+                          Algoritmo alg_pagina, Algoritmo alg_tlb, FILE *backing,
+                          MemoriaVirtual *mv) {
     FILE *saida = fopen(caminho, "w");
     if (saida == NULL) {
         fprintf(stderr, "Erro: nao foi possivel criar '%s': %s\n", caminho, strerror(errno));
@@ -355,25 +443,28 @@ static bool escreve_saida(const char *caminho, const ListaEnderecos *enderecos,
 
     bool ok = true;
     for (int i = 0; i < enderecos->n && ok; i++) {
+        int indice_tlb;
         int fisico;
         int valor;
-        if (!traduz(mv, enderecos->v[i], alg, backing, &fisico, &valor)) {
+        if (!traduz(mv, enderecos->v[i], alg_pagina, alg_tlb, backing,
+                    &indice_tlb, &fisico, &valor)) {
             ok = false;
             break;
         }
         if (fprintf(saida, "Virtual address: %d TLB: %d Physical address: %d Value: %d\n",
-                    enderecos->v[i], 0, fisico, valor) < 0) {
+                    enderecos->v[i], indice_tlb, fisico, valor) < 0) {
             ok = false;
         }
     }
 
     if (ok) {
         double taxa_faltas = (double)mv->faults / enderecos->n;
+        double taxa_hits = (double)mv->hits / enderecos->n;
         if (fprintf(saida, "Number of Translated Addresses = %d\n", enderecos->n) < 0
                 || fprintf(saida, "Page Faults = %ld\n", mv->faults) < 0
                 || fprintf(saida, "Page Fault Rate = %.3f\n", taxa_faltas) < 0
-                || fprintf(saida, "TLB Hits = %ld\n", 0L) < 0
-                || fprintf(saida, "TLB Hit Rate = %.3f\n", 0.0) < 0) {
+                || fprintf(saida, "TLB Hits = %ld\n", mv->hits) < 0
+                || fprintf(saida, "TLB Hit Rate = %.3f\n", taxa_hits) < 0) {
             ok = false;
         }
     }
@@ -442,7 +533,7 @@ int main(int argc, char *argv[]) {
     if (ok) {
         MemoriaVirtual mv;
         inicializa_memoria(&mv);
-        ok = escreve_saida(ARQ_SAIDA, &enderecos, alg_pagina, backing, &mv);
+        ok = escreve_saida(ARQ_SAIDA, &enderecos, alg_pagina, alg_tlb, backing, &mv);
     }
 
     if (backing != NULL) {

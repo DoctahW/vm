@@ -368,8 +368,9 @@ static void tlb_invalida(Tlb *tlb, int pagina) {
 
 // memoria virtual
 
-// o estado inteiro e estatico (64 KiB de memoria fisica, tabela, quadros);
-// so o vetor de enderecos e dinamico
+// estado de tamanho fixo, sem alocacao dinamica: vive na pilha do main
+// (memoria fisica + tabela, quadros e tlb: ~35 KiB com 128 quadros, ~68 KiB
+// com 256); so o vetor de enderecos e dinamico
 typedef struct {
     int tabela[N_PAGINAS];
     int dono[N_QUADROS];

@@ -1,0 +1,10 @@
+vm
+vm_tsan
+correct.txt
+compile_commands.json
+entrega/
+relatorio/*.aux
+relatorio/*.fdb_latexmk
+relatorio/*.fls
+relatorio/*.log
+relatorio/*.synctex.gz

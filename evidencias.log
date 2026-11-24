@@ -141,3 +141,85 @@ tsan: sem data race
 [euclides@pc-casa atvd6]$ exit
 
 Script concluído em 2026-11-24 16:57:58-03:00 [COMMAND_EXIT_CODE="0"]
+Script iniciado em 2026-11-24 17:10:18-03:00 [COMMAND="bash --noprofile --rcfile tests/logrc -i" TERM="xterm-256color" TTY="/dev/pts/2" COLUMNS="177" LINES="39"]
+[euclides@pc-casa atvd6]$ sh tests/run_tests.sh
+== build
+ok     make rebuild SEM_THREAD=1 sem warning
+ok     make rebuild FRAMES=256 sem warning
+ok     make rebuild  sem warning
+ok     make clean remove vm
+ok     make sem alvo gera vm
+== argumentos
+ok     #1 sem argumentos  ->  Uso: /home/euclides/Projetos/faculdade/infra-sw/atvd6/vm <arquivo de enderecos> <pagina: fifo|lru> <tlb: fifo|lru>
+ok     #1 so o arquivo  ->  Uso: /home/euclides/Projetos/faculdade/infra-sw/atvd6/vm <arquivo de enderecos> <pagina: fifo|lru> <tlb: fifo|lru>
+ok     #1 arquivo + pagina  ->  Uso: /home/euclides/Projetos/faculdade/infra-sw/atvd6/vm <arquivo de enderecos> <pagina: fifo|lru> <tlb: fifo|lru>
+ok     #1 4 argumentos  ->  Uso: /home/euclides/Projetos/faculdade/infra-sw/atvd6/vm <arquivo de enderecos> <pagina: fifo|lru> <tlb: fifo|lru>
+ok     #2 pagina LRU (maiuscula)  ->  Erro: algoritmo de substituicao de pagina invalido: 'LRU' (use fifo ou lru)
+ok     #2 pagina opt  ->  Erro: algoritmo de substituicao de pagina invalido: 'opt' (use fifo ou lru)
+ok     #2 pagina vazia  ->  Erro: algoritmo de substituicao de pagina invalido: '' (use fifo ou lru)
+ok     #3 tlb xyz  ->  Erro: algoritmo de substituicao da TLB invalido: 'xyz' (use fifo ou lru)
+ok     #3 tlb FIFO (maiuscula)  ->  Erro: algoritmo de substituicao da TLB invalido: 'FIFO' (use fifo ou lru)
+== addresses.txt
+ok     #4 inexistente  ->  Erro: nao foi possivel abrir 'addresses.txt': No such file or directory
+ok     #5 sem permissao de leitura  ->  Erro: nao foi possivel abrir 'addresses.txt': Permission denied
+ok     #6 e um diretorio  ->  Erro: addresses.txt: linha 1: falha de leitura do arquivo: Is a directory
+ok     #7 vazio  ->  Erro: addresses.txt: o arquivo nao tem nenhum endereco
+ok     #7 so linhas em branco  ->  Erro: addresses.txt: o arquivo nao tem nenhum endereco
+ok     #8 abc  ->  Erro: addresses.txt: linha 1 ('abc'): valor nao e um inteiro valido
+ok     #8 12a na linha 2  ->  Erro: addresses.txt: linha 2 ('12a'): valor nao e um inteiro valido
+ok     #8 decimal  ->  Erro: addresses.txt: linha 1 ('4.5'): valor nao e um inteiro valido
+ok     #8 so sinal  ->  Erro: addresses.txt: linha 1 ('+'): valor nao e um inteiro valido
+ok     #8 +5  ->  Erro: addresses.txt: linha 1 ('+5'): valor nao e um inteiro valido
+ok     #8 -3 na linha 3 (branco conta)  ->  Erro: addresses.txt: linha 3 ('-3'): endereco nao pode ser negativo
+ok     #8 byte nulo  ->  Erro: addresses.txt: linha 2: valor nao e um inteiro valido (byte nulo)
+ok     #9 65536  ->  Erro: addresses.txt: linha 2 ('65536'): endereco fora do espaco de enderecos (0 a 65535)
+ok     #9 overflow  ->  Erro: addresses.txt: linha 1 ('99999999999'): endereco fora do espaco de enderecos (0 a 65535)
+ok     #10 dois valores  ->  Erro: addresses.txt: linha 1 ('123 456'): mais de um valor na linha (um endereco por linha)
+ok     #10 dois valores (tab)  ->  Erro: addresses.txt: linha 1 ('123	456'): mais de um valor na linha (um endereco por linha)
+ok     #8 erro so na linha 1001 do oficial  ->  Erro: addresses.txt: linha 1001 ('x'): valor nao e um inteiro valido
+== BACKING_STORE.bin
+ok     #11 ausente  ->  Erro: nao foi possivel abrir 'BACKING_STORE.bin': No such file or directory
+ok     #12 65535 bytes  ->  Erro: 'BACKING_STORE.bin' invalido: tem 65535 bytes, esperado 65536
+ok     #12 65537 bytes  ->  Erro: 'BACKING_STORE.bin' invalido: tem 65537 bytes, esperado 65536
+ok     #12 e um diretorio  ->  Erro: 'BACKING_STORE.bin' invalido: nao e um arquivo regular
+== correct.txt (saida)
+ok     #13 diretorio sem escrita  ->  Erro: nao foi possivel criar 'correct.txt': Permission denied
+ok     #13 disco cheio (correct.txt -> /dev/full)  ->  Erro: falha ao gravar 'correct.txt': No space left on device
+ok     #14 erro no argv  ->  Uso: /home/euclides/Projetos/faculdade/infra-sw/atvd6/vm <arquivo de enderecos> <pagina: fifo|lru> <tlb: fifo|lru>
+ok     #14 algoritmo invalido  ->  Erro: algoritmo de substituicao da TLB invalido: 'xyz' (use fifo ou lru)
+ok     #14 erro na ultima linha do addresses.txt  ->  Erro: addresses.txt: linha 1001 ('65536'): endereco fora do espaco de enderecos (0 a 65535)
+ok     #14 BACKING_STORE.bin ausente  ->  Erro: nao foi possivel abrir 'BACKING_STORE.bin': No such file or directory
+== entradas validas
+ok     oficial (ultima linha '12107 ')
+ok     CRLF
+ok     sem \n no fim
+ok     linhas em branco e espacos
+ok     1 endereco
+== correct.txt byte a byte
+ok     V1 oficial lru fifo (threads) = correct_esperado.txt
+ok     V1 oficial lru fifo (SEM_THREAD) = correct_esperado.txt
+ok     V1 oficial em CRLF = correct_esperado.txt
+ok     V1 oficial sem \n no fim = correct_esperado.txt
+ok     limites 0/65535, Value com sinal (-1), hit de TLB
+== contagens (plano §3.4)
+ok     V2 fifo fifo  (Page Faults = 538, TLB Hits = 54)
+ok     V2 fifo lru  (Page Faults = 538, TLB Hits = 55)
+ok     V2 lru fifo  (Page Faults = 539, TLB Hits = 54)
+ok     V2 lru lru  (Page Faults = 539, TLB Hits = 55)
+ok     V2 256 quadros, lru fifo  (Page Faults = 244, TLB Hits = 54)
+ok     V2 256 quadros, lru lru  (Page Faults = 244, TLB Hits = 55)
+== threads = sequencial
+ok     V3 fifo fifo: threads = SEM_THREAD
+ok     V3 fifo lru: threads = SEM_THREAD
+ok     V3 lru fifo: threads = SEM_THREAD
+ok     V3 lru lru: threads = SEM_THREAD
+== invalidacao da TLB (V4)
+ok     V4 vm: pagina despejada sai da TLB (Page Faults = 130; Virtual address: 0 TLB: 8 Physical address: 256 Value: 0)
+ok     V4 vm_seq: pagina despejada sai da TLB (Page Faults = 130; Virtual address: 0 TLB: 8 Physical address: 256 Value: 0)
+== ThreadSanitizer
+ok     tsan: sem data race, saida = oficial
+
+resultado: 64 ok, 0 falha
+[euclides@pc-casa atvd6]$ [K[euclides@pc-casa atvd6]$ [K[euclides@pc-casa atvd6]$ [K[euclides@pc-casa atvd6]$ [K[euclides@pc-casa atvd6]$ [K[euclides@pc-casa atvd6]$ [K[euclides@pc-casa atvd6]$ exit
+
+Script concluído em 2026-11-24 17:13:32-03:00 [COMMAND_EXIT_CODE="0"]

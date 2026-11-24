@@ -7,6 +7,10 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#ifndef SEM_THREAD
+#include <pthread.h>
+#endif
+
 #define ARQ_BACKING "BACKING_STORE.bin"
 #define ARQ_SAIDA   "correct.txt"
 
@@ -266,7 +270,9 @@ static void tlb_inicializa(Tlb *tlb) {
     tlb->prox_fifo = 0;
 }
 
-// busca sequencial
+#ifdef SEM_THREAD
+
+// busca sequencial (make SEM_THREAD=1)
 static int tlb_busca(const Tlb *tlb, int pagina) {
     for (int i = 0; i < TAM_TLB; i++) {
         if (tlb->entradas[i].valida && tlb->entradas[i].pagina == pagina) {
@@ -275,6 +281,52 @@ static int tlb_busca(const Tlb *tlb, int pagina) {
     }
     return -1;
 }
+
+#else
+
+typedef struct {
+    const EntradaTLB *entrada;
+    int pagina;
+    bool achou;
+} ArgBusca;
+
+static void *compara_entrada(void *arg) {
+    ArgBusca *busca = arg;
+    busca->achou = busca->entrada->valida && busca->entrada->pagina == busca->pagina;
+    return NULL;
+}
+
+// uma thread por entrada da tlb. cada thread so le a propria entrada e so
+// escreve no proprio ArgBusca, entao nenhum dado compartilhado e escrito durante
+// a busca e nao ha mutex; a tlb so e alterada depois do join (barreira).
+// se alguma criacao falhar, a thread principal compara aquela entrada (mesmo
+// resultado), como o criada[i] do mandelbrot
+static int tlb_busca(const Tlb *tlb, int pagina) {
+    pthread_t threads[TAM_TLB];
+    ArgBusca args[TAM_TLB];
+    bool criada[TAM_TLB];
+
+    for (int i = 0; i < TAM_TLB; i++) {
+        args[i] = (ArgBusca){ .entrada = &tlb->entradas[i], .pagina = pagina, .achou = false };
+        criada[i] = pthread_create(&threads[i], NULL, compara_entrada, &args[i]) == 0;
+    }
+    for (int i = 0; i < TAM_TLB; i++) {
+        if (criada[i]) {
+            pthread_join(threads[i], NULL);
+        } else {
+            compara_entrada(&args[i]);
+        }
+    }
+
+    for (int i = 0; i < TAM_TLB; i++) {
+        if (args[i].achou) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+#endif
 
 // fifo: ponteiro circular puro, mesmo que haja entrada invalidada (buraco);
 // lru: primeira entrada invalida, senao a de menor uso

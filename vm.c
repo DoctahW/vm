@@ -245,6 +245,150 @@ static FILE *abre_backing_store(void) {
     return arquivo;
 }
 
+// memoria virtual
+
+// o estado inteiro e estatico (64 KiB de memoria fisica, tabela, quadros);
+// so o vetor de enderecos e dinamico
+typedef struct {
+    int tabela[N_PAGINAS];
+    int dono[N_QUADROS];
+    signed char memoria[N_QUADROS][TAM_PAGINA];
+    unsigned long uso_quadro[N_QUADROS];
+    int prox_livre;
+    int prox_vitima_fifo;
+    unsigned long relogio;
+    long faults;
+} MemoriaVirtual;
+
+static void inicializa_memoria(MemoriaVirtual *mv) {
+    for (int p = 0; p < N_PAGINAS; p++) {
+        mv->tabela[p] = -1;
+    }
+    for (int q = 0; q < N_QUADROS; q++) {
+        mv->dono[q] = -1;
+        mv->uso_quadro[q] = 0;
+    }
+    memset(mv->memoria, 0, sizeof mv->memoria);
+    mv->prox_livre = 0;
+    mv->prox_vitima_fifo = 0;
+    mv->relogio = 0;
+    mv->faults = 0;
+}
+
+static bool carrega_pagina(FILE *backing, int pagina, signed char *destino) {
+    if (fseek(backing, (long)pagina * TAM_PAGINA, SEEK_SET) != 0) {
+        fprintf(stderr, "Erro: falha ao posicionar '%s' na pagina %d: %s\n",
+                ARQ_BACKING, pagina, strerror(errno));
+        return false;
+    }
+    if (fread(destino, 1, TAM_PAGINA, backing) != TAM_PAGINA) {
+        if (ferror(backing)) {
+            fprintf(stderr, "Erro: falha ao ler '%s' na pagina %d: %s\n",
+                    ARQ_BACKING, pagina, strerror(errno));
+        } else {
+            fprintf(stderr, "Erro: '%s' terminou antes da pagina %d\n", ARQ_BACKING, pagina);
+        }
+        return false;
+    }
+    return true;
+}
+
+// fifo: ponteiro circular (os quadros enchem em ordem, logo a ordem de chegada
+// das paginas depois de cheia e a circular); lru: menor uso_quadro
+static int escolhe_vitima(MemoriaVirtual *mv, Algoritmo alg) {
+    if (alg == ALG_FIFO) {
+        int quadro = mv->prox_vitima_fifo;
+        mv->prox_vitima_fifo = (quadro + 1) % N_QUADROS;
+        return quadro;
+    }
+
+    int quadro = 0;
+    for (int q = 1; q < N_QUADROS; q++) {
+        if (mv->uso_quadro[q] < mv->uso_quadro[quadro]) {
+            quadro = q;
+        }
+    }
+    return quadro;
+}
+
+static bool traduz(MemoriaVirtual *mv, int endereco, Algoritmo alg, FILE *backing,
+                   int *fisico, int *valor) {
+    mv->relogio++;
+
+    int pagina = endereco >> 8;
+    int deslocamento = endereco & (TAM_PAGINA - 1);
+    int quadro = mv->tabela[pagina];
+
+    if (quadro < 0) {
+        mv->faults++;
+
+        if (mv->prox_livre < N_QUADROS) {
+            quadro = mv->prox_livre++;
+        } else {
+            quadro = escolhe_vitima(mv, alg);
+            int despejada = mv->dono[quadro];
+            if (despejada >= 0) {
+                mv->tabela[despejada] = -1;
+            }
+        }
+
+        if (!carrega_pagina(backing, pagina, mv->memoria[quadro])) {
+            return false;
+        }
+        mv->tabela[pagina] = quadro;
+        mv->dono[quadro] = pagina;
+    }
+
+    mv->uso_quadro[quadro] = mv->relogio;
+    *fisico = quadro * TAM_PAGINA + deslocamento;
+    *valor = mv->memoria[quadro][deslocamento];
+    return true;
+}
+
+static bool escreve_saida(const char *caminho, const ListaEnderecos *enderecos,
+                          Algoritmo alg, FILE *backing, MemoriaVirtual *mv) {
+    FILE *saida = fopen(caminho, "w");
+    if (saida == NULL) {
+        fprintf(stderr, "Erro: nao foi possivel criar '%s': %s\n", caminho, strerror(errno));
+        return false;
+    }
+
+    bool ok = true;
+    for (int i = 0; i < enderecos->n && ok; i++) {
+        int fisico;
+        int valor;
+        if (!traduz(mv, enderecos->v[i], alg, backing, &fisico, &valor)) {
+            ok = false;
+            break;
+        }
+        if (fprintf(saida, "Virtual address: %d TLB: %d Physical address: %d Value: %d\n",
+                    enderecos->v[i], 0, fisico, valor) < 0) {
+            ok = false;
+        }
+    }
+
+    if (ok) {
+        double taxa_faltas = (double)mv->faults / enderecos->n;
+        if (fprintf(saida, "Number of Translated Addresses = %d\n", enderecos->n) < 0
+                || fprintf(saida, "Page Faults = %ld\n", mv->faults) < 0
+                || fprintf(saida, "Page Fault Rate = %.3f\n", taxa_faltas) < 0
+                || fprintf(saida, "TLB Hits = %ld\n", 0L) < 0
+                || fprintf(saida, "TLB Hit Rate = %.3f\n", 0.0) < 0) {
+            ok = false;
+        }
+    }
+
+    bool falha_gravacao = ferror(saida) != 0;
+    if (fclose(saida) != 0) {
+        falha_gravacao = true;
+    }
+    if (falha_gravacao) {
+        fprintf(stderr, "Erro: falha ao gravar '%s': %s\n", caminho, strerror(errno));
+        return false;
+    }
+    return ok;
+}
+
 // main
 
 static bool carrega_algoritmos(char **argv, Algoritmo *pagina, Algoritmo *tlb) {
@@ -295,7 +439,11 @@ int main(int argc, char *argv[]) {
            && carrega_enderecos(argv[1], &enderecos)
            && (backing = abre_backing_store()) != NULL;
 
-    // #TODO: traduzir e escrever ARQ_SAIDA
+    if (ok) {
+        MemoriaVirtual mv;
+        inicializa_memoria(&mv);
+        ok = escreve_saida(ARQ_SAIDA, &enderecos, alg_pagina, backing, &mv);
+    }
 
     if (backing != NULL) {
         fclose(backing);
